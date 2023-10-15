@@ -167,6 +167,7 @@ resource "tls_self_signed_cert" "this" {
 }
 
 
+# (9) Generating Secrets JSON
 resource "null_resource" "generate_secrets_json" {
   provisioner "local-exec" {
     command = <<-EOT
@@ -203,6 +204,7 @@ resource "null_resource" "generate_secrets_json" {
   }
 }
 
+# (10) Waiting for Secrets JSON
 resource "null_resource" "wait_for_secrets_json" {
   # depends_on = [null_resource.check_and_install_sops]
   count = local.env_file_exists && !local.secrets_json_exists ? 1 : 0
@@ -213,12 +215,14 @@ resource "null_resource" "wait_for_secrets_json" {
 }
 
 
+# (11) Locals secret usage
 locals {
   secrets_json_exists = can(file(var.secrets_json_file))
   env_file_exists     = can(file(var.env_file_path))
   secrets_to_use = local.secrets_json_exists ? jsondecode(file(var.secrets_json_file)) : var.secrets
 }
 
+# (12) Creating Secret Files
 resource "local_file" "secret_enc_file" {
   depends_on = [kubectl_manifest.sealed_secrets_key]
   # for_each = var.secrets
@@ -241,6 +245,7 @@ CONTENT
 
 }
 
+# (13) Waiting for Sealed Secrets Controller
 resource "null_resource" "wait_for_sealed_secrets_controller" {
 
   provisioner "local-exec" {
@@ -254,6 +259,7 @@ resource "null_resource" "wait_for_sealed_secrets_controller" {
   }
 }
 
+# (14) Encrypting Secrets with Kubeseal
 resource "null_resource" "encrypt_secrets_kubeseal" {
   depends_on = [null_resource.check_and_install_kubeseal,local_file.secret_enc_file,null_resource.wait_for_sealed_secrets_controller]
   for_each = local.secrets_to_use
@@ -274,6 +280,7 @@ resource "null_resource" "encrypt_secrets_kubeseal" {
   
 }
 
+# (15) Encrypting List Secrets with Kubeseal
 resource "null_resource" "encrypt_secrets_list_kubeseal" {
   depends_on = [null_resource.check_and_install_kubeseal,null_resource.wait_for_sealed_secrets_controller]
 
@@ -289,6 +296,7 @@ resource "null_resource" "encrypt_secrets_list_kubeseal" {
   }
 }
 
+# (16) Concatenating Encrypted Secrets
 resource "null_resource" "concatenate_encrypted_secrets" {
   depends_on = [null_resource.encrypt_secrets_kubeseal, null_resource.encrypt_secrets_list_kubeseal]
   triggers = {
