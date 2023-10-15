@@ -165,3 +165,153 @@ resource "tls_self_signed_cert" "this" {
     "server_auth",
   ]
 }
+
+
+resource "null_resource" "generate_secrets_json" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      #!/bin/bash
+
+      env_file=${var.env_file_path}
+      secrets_json=${var.secrets_json_file}
+
+      if [ ! -e "$secrets_json" ] && [ -s "$env_file" ]; then
+        echo "{" > "$secrets_json"
+        echo '  "env_secret": {' >> "$secrets_json"
+
+        # Read each line in the .env file
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          # Split each line into key and value
+          key=$(echo "$line" | cut -d= -f1)
+          value=$(echo "$line" | cut -d= -f2-)
+
+          # Add the key-value pair to the "env_secret" object
+          echo "    \"$key\": \"$value\"," >> "$secrets_json"
+        done < "$env_file"
+
+        # Remove the trailing comma from the last line
+        sed -i '$ s/,$//' "$secrets_json"
+
+        # Close the "env_secret" object
+        echo "  }" >> "$secrets_json"
+
+        # Close the main JSON object
+        echo "}" >> "$secrets_json"
+      fi
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+}
+
+resource "null_resource" "wait_for_secrets_json" {
+  # depends_on = [null_resource.check_and_install_sops]
+  count = local.env_file_exists && !local.secrets_json_exists ? 1 : 0
+  provisioner "local-exec" {
+    command = "sleep 5"
+  }
+  
+}
+
+
+locals {
+  secrets_json_exists = can(file(var.secrets_json_file))
+  env_file_exists     = can(file(var.env_file_path))
+  secrets_to_use = local.secrets_json_exists ? jsondecode(file(var.secrets_json_file)) : var.secrets
+}
+
+resource "local_file" "secret_enc_file" {
+  depends_on = [kubectl_manifest.sealed_secrets_key]
+  # for_each = var.secrets
+  for_each = local.secrets_to_use
+
+  filename = "${each.key}-enc.yaml"
+  content  = <<-CONTENT
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${each.key}
+  namespace: ${var.namespace}
+type: Opaque
+data:
+${join("\n", [
+    for k, v in each.value :
+    "  ${k}: ${base64encode(v)}"
+  ])}
+CONTENT
+
+}
+
+resource "null_resource" "wait_for_sealed_secrets_controller" {
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      until kubectl get services -n sealed-secrets | grep sealed-secrets; do 
+        echo -e "\033[33mWaiting for Sealed Secrets Controller to be ready...\033[0m"
+        sleep 3
+      done
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+}
+
+resource "null_resource" "encrypt_secrets_kubeseal" {
+  depends_on = [null_resource.check_and_install_kubeseal,local_file.secret_enc_file,null_resource.wait_for_sealed_secrets_controller]
+  for_each = local.secrets_to_use
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      kubeseal -f ${local_file.secret_enc_file[each.key].filename} -w ${local_file.secret_enc_file[each.key].filename} \
+        --controller-name sealed-secrets \
+        --controller-namespace ${var.sealed_secret_snamespace}
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "rm -f ${path.module}/*enc.yaml"
+  }
+  
+}
+
+resource "null_resource" "encrypt_secrets_list_kubeseal" {
+  depends_on = [null_resource.check_and_install_kubeseal,null_resource.wait_for_sealed_secrets_controller]
+
+  count = length(var.secret_file_list) > 0 && !can(var.secret_file_list[0]) ? length(var.secret_file_list) : 0
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      kubeseal -f ${var.secret_file_list[count.index]} -w ${var.secret_file_list[count.index]} \
+        --controller-name sealed-secrets \
+        --controller-namespace ${var.sealed_secret_snamespace}
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+}
+
+resource "null_resource" "concatenate_encrypted_secrets" {
+  depends_on = [null_resource.encrypt_secrets_kubeseal, null_resource.encrypt_secrets_list_kubeseal]
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      first=1
+      for file in ${path.module}/*-enc.yaml; do
+        if [ $first -eq 1 ]; then
+          cat $file >> ${path.module}/all-encrypted-secrets.yaml
+          first=0
+        else
+          echo -e "\n---\n" >> ${path.module}/all-encrypted-secrets.yaml
+          cat $file >> ${path.module}/all-encrypted-secrets.yaml
+        fi
+      done
+    EOT
+    interpreter = ["bash", "-c"]
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "rm -f ${path.module}/all-encrypted-secrets.yaml"
+  }
+}
