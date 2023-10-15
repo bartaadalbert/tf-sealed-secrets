@@ -5,10 +5,10 @@ resource "null_resource" "check_and_install_kubeseal" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      if ! command -v sops &> /dev/null; then
+      if ! command -v kubeseal &> /dev/null; then
         echo "kubeseal is not installed. Installing..."
         
-        LATEST_KUBESEAL_VERSION=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest | grep -Eo '"tag_name": "[^"]+"' | cut -d'"' -f4)
+        LATEST_KUBESEAL_VERSION=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest | grep -Eo '"tag_name": "v[^"]+"' | cut -d'"' -f4 | cut -c 2-)
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
         ARCH=$(uname -m)
 
@@ -38,11 +38,13 @@ resource "null_resource" "check_and_install_kubeseal" {
             ;;
         esac
 
-        curl -L -o /usr/local/bin/kubeseal \
-          "https://github.com/bitnami-labs/sealed-secrets/releases/download/v$LATEST_KUBESEAL_VERSION/kubeseal-$KUBESEAL_OS-$KUBESEAL_ARCH" && \
-        chmod +x /usr/local/bin/kubeseal
+        wget -O /tmp/kubeseal.tar.gz \
+          "https://github.com/bitnami-labs/sealed-secrets/releases/download/v$LATEST_KUBESEAL_VERSION/kubeseal-$LATEST_KUBESEAL_VERSION-$KUBESEAL_OS-$KUBESEAL_ARCH.tar.gz" && \
+        tar -xvzf /tmp/kubeseal.tar.gz -C /tmp/ && \
+        sudo install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal && \
+        rm -f /tmp/kubeseal*
       fi
-      INSTALLED_KUBESEAL_VERSION=$(kubeseal --version 2>&1 | awk '{print $2}')
+      INSTALLED_KUBESEAL_VERSION=$(kubeseal --version 2>&1 | awk '{print $2 $3}')
 
       # Output the installed KUBESEAL version to a file if KUBESEAL is installed
       if [[ ! -z "$INSTALLED_KUBESEAL_VERSION" ]]; then
@@ -58,55 +60,82 @@ resource "null_resource" "check_and_install_kubeseal" {
 }
 
 # (2) Name space
-resource "kubernetes_namespace" "sealed-secrets-ns" {
-  metadata {
-    name = var.namespace
+resource "kubectl_manifest" "sealed_secrets_ns" {
+  yaml_body = <<-YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${var.sealed_secret_snamespace}
+YAML
+}
+
+# (2) Key locals
+locals {
+  tls_crt_content = var.use_manual_keys ? file(var.public_key_path) : tls_self_signed_cert.this[0].cert_pem
+  tls_key_content = var.use_manual_keys ? file(var.private_key_path) : tls_self_signed_cert.this[0].private_key_pem
+}
+
+# (3) Namespace ready check
+resource "null_resource" "namespace_check" {
+  provisioner "local-exec" {
+    command = <<-EOH
+      until kubectl get namespace ${var.sealed_secret_snamespace}; do 
+        echo -e "\033[33mWaiting for namespace ${var.sealed_secret_snamespace}...\033[0m"
+        sleep 1 
+      done
+    EOH
   }
 }
 
-# (2) Key for kubeseal
-resource "kubernetes_secret" "sealed-secrets-key" {
-  depends_on = [kubernetes_namespace.sealed-secrets-ns,null_resource.save_keys]
-  metadata {
-    name      = "sealed-secrets-key"
-    namespace = var.namespace
-  }
-  data = {
-    "tls.crt" = fileexists(var.public_key_path) ? file(var.public_key_path) : var.public_key
-    "tls.key" = fileexists(var.private_key_path) ? file(var.private_key_path) : var.private_key
-  }
-  type = "kubernetes.io/tls"
+
+# (4) Key for kubeseal
+resource "kubectl_manifest" "sealed_secrets_key" {
+  depends_on = [null_resource.namespace_check,kubectl_manifest.sealed_secrets_ns, null_resource.save_keys]
+
+  yaml_body = <<-YAML
+apiVersion: v1
+kind: Secret
+metadata:
+    name: sealed-secrets-key
+    namespace: ${var.sealed_secret_snamespace}
+type: kubernetes.io/tls
+data:
+    tls.crt: ${base64encode(local.tls_crt_content)}
+    tls.key: ${base64encode(local.tls_key_content)}
+YAML
 }
 
-# (3) helm sealed secrets
-resource "helm_release" "sealed-secrets" {
-  depends_on = [kubernetes_secret.sealed-secrets-key]
+# (5) helm sealed secrets
+resource "helm_release" "sealed_secrets" {
+  depends_on = [kubectl_manifest.sealed_secrets_key]
   chart      = "sealed-secrets"
   name       = "sealed-secrets"
-  namespace  = var.namespace
+  namespace  = var.sealed_secret_snamespace
   repository = "https://bitnami-labs.github.io/sealed-secrets"
 }
 
-# (4)
+# (6) TLS private key 
 resource "tls_private_key" "this" {
-  count = var.public_key == null && !fileexists(var.public_key_path) ? 1 : 0
+  count       = var.use_manual_keys ? 0 : 1
   algorithm   = var.algorithm
-  ecdsa_curve = var.ecdsa_curve
+  rsa_bits    = var.rsa_bits
 }
 
-# (5)
+# (7) Save created keys
 resource "null_resource" "save_keys" {
-  count = tls_private_key.this.count
-
-  triggers = {
-    tls_private_key_algorithm = count.index == 0 ? tls_private_key.this[0].algorithm : ""
-    tls_private_key_curve     = count.index == 0 ? tls_private_key.this[0].ecdsa_curve : ""
-  }
+  count      = var.use_manual_keys ? 0 : 1
 
   provisioner "local-exec" {
     command = <<-EOT
-      echo "${tls_private_key.this[0].private_key_pem}" > ${var.private_key_path}
-      echo "${tls_private_key.this[0].public_key_pem}" > ${var.public_key_path}
+      if [ ! -f ${var.private_key_path} ]; then
+        echo "${tls_self_signed_cert.this[0].private_key_pem}" > ${var.private_key_path}
+      fi
+      if [ ! -f "${path.module}/keys/pub.key" ]; then
+        echo "${tls_private_key.this[0].public_key_pem}" > "${path.module}/keys/pub.key"
+      fi
+      if [ ! -f ${var.public_key_path} ]; then
+        echo "${tls_self_signed_cert.this[0].cert_pem}" > ${var.public_key_path}
+      fi
     EOT
   }
 
@@ -114,4 +143,25 @@ resource "null_resource" "save_keys" {
     when    = destroy
     command = "rm -f ${path.module}/keys/*"
   }
+  depends_on = [tls_private_key.this]
+
+}
+
+# (8) TLS self cert
+resource "tls_self_signed_cert" "this" {
+  count      = var.use_manual_keys ? 0 : 1
+  private_key_pem = tls_private_key.this[0].private_key_pem
+
+  subject {
+    common_name  = var.common_name
+    organization = var.organization
+  }
+
+  validity_period_hours = 87600
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
 }
