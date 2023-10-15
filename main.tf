@@ -141,7 +141,7 @@ resource "null_resource" "save_keys" {
 
   provisioner "local-exec" {
     when    = destroy
-    command = "rm -f ${path.module}/keys/*"
+    command = "rm -f ${path.module}/keys/tls*"
   }
   depends_on = [tls_private_key.this]
 
