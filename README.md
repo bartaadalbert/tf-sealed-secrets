@@ -50,7 +50,11 @@ Example secrets.json format:
 ```json
   {
     "ghcrio-image-puller": {
-      ".dockerconfigjson": "{ \"auths\": { \"ghcr.io\": { \"username\": \"west\", \"password\": \"ghp_xxxxxxxxxxxxxxxxxxxxxxx\" } } }"
+      "namespace": "flux-system",
+      "type": "kubernetes.io/dockerconfigjson",
+      "data": {
+        ".dockerconfigjson": "{ \"auths\": { \"ghcr.io\": { \"username\": \"bartaadalbert\", \"password\": \"ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxx\" } } }" 
+      }
     }
   }
 
@@ -59,15 +63,23 @@ Example of defining secrets within variables:
 
 ```hcl
   variable "secrets" {
-    description = "Map of secret names and key-value pairs"
-    type        = map(map(string))
-    default     = {
-      secret1 = {
-        key1 = "value1"
+  description = "Map of secret names, namespaces, types and key-value pairs"
+  type        = map(object({
+    namespace = string
+    type      = string
+    data      = map(string)
+  }))
+  default     = {
+    secret1 = {
+      namespace = "default",
+      type      = "Opaque",
+      data      = {
+        key1 = "value1",
         key2 = "value2"
       }
     }
   }
+}
 ```
 
 ## Input Variables

@@ -183,6 +183,9 @@ resource "null_resource" "generate_secrets_json" {
       if [ ! -e "$secrets_json" ] && [ -s "$env_file" ]; then
         echo "{" > "$secrets_json"
         echo '  "env_secret": {' >> "$secrets_json"
+        echo '    "namespace": "${var.namespace}",' >> "$secrets_json"
+        echo '    "type": "Opaque",' >> "$secrets_json"
+        echo '    "data": {' >> "$secrets_json"
 
         # Read each line in the .env file
         while IFS= read -r line || [[ -n "$line" ]]; do
@@ -190,14 +193,15 @@ resource "null_resource" "generate_secrets_json" {
           key=$(echo "$line" | cut -d= -f1)
           value=$(echo "$line" | cut -d= -f2-)
 
-          # Add the key-value pair to the "env_secret" object
-          echo "    \"$key\": \"$value\"," >> "$secrets_json"
+          # Add the key-value pair to the "data" object
+          echo "      \"$key\": \"$value\"," >> "$secrets_json"
         done < "$env_file"
 
-        # Remove the trailing comma from the last line
+        # Remove the trailing comma from the last line in "data"
         sed -i '$ s/,$//' "$secrets_json"
 
-        # Close the "env_secret" object
+        # Close the "data" object and "env_secret" object
+        echo "    }" >> "$secrets_json"
         echo "  }" >> "$secrets_json"
 
         # Close the main JSON object
@@ -207,6 +211,7 @@ resource "null_resource" "generate_secrets_json" {
     interpreter = ["bash", "-c"]
   }
 }
+
 
 # (10) Waiting for Secrets JSON
 resource "null_resource" "wait_for_secrets_json" {
@@ -229,8 +234,7 @@ locals {
 # (12) Creating Secret Files
 resource "local_file" "secret_enc_file" {
   depends_on = [kubectl_manifest.sealed_secrets_key]
-  # for_each = var.secrets
-  for_each = local.secrets_to_use
+  for_each   = local.secrets_to_use
 
   filename = "${path.module}/${each.key}-enc.yaml"
   content  = <<-CONTENT
@@ -238,15 +242,14 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: ${each.key}
-  namespace: ${var.namespace}
-type: Opaque
+  namespace: ${each.value.namespace}
+type: ${each.value.type}
 data:
 ${join("\n", [
-    for k, v in each.value :
+    for k, v in each.value.data :
     "  ${k}: ${base64encode(v)}"
   ])}
 CONTENT
-
 }
 
 # (13) Waiting for Sealed Secrets Controller
