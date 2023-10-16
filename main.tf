@@ -242,7 +242,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: ${each.key}
-  namespace: ${each.value.namespace}
+  namespace: ${each.value.namespace != "" ? each.value.namespace : var.namespace}
 type: ${each.value.type}
 data:
 ${join("\n", [
