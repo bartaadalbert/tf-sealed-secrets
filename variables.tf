@@ -63,13 +63,13 @@ variable "use_manual_keys" {
 variable "public_key_path" {
   description = "Fallback TLS CRT if file does not exist"
   type        = string
-  default     = "keys/tls.crt"
+  default     = ""
 }
 
 variable "private_key_path" {
   description = "Fallback TLS Key if file does not exist"
   type        = string
-  default     = "keys/tls.key"
+  default     = ""
 }
 
 variable "algorithm" {

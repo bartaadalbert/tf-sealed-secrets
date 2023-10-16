@@ -71,8 +71,12 @@ YAML
 
 # (2) Key locals
 locals {
-  tls_crt_content = var.use_manual_keys ? file(var.public_key_path) : tls_self_signed_cert.this[0].cert_pem
-  tls_key_content = var.use_manual_keys ? file(var.private_key_path) : tls_self_signed_cert.this[0].private_key_pem
+
+  full_public_key_path  = var.public_key_path != "" ? var.public_key_path : "${path.module}/keys/tls.crt"
+  full_private_key_path = var.private_key_path != "" ? var.private_key_path : "${path.module}/keys/tls.key"
+
+  tls_crt_content = var.use_manual_keys ? file(local.full_public_key_path) : tls_self_signed_cert.this[0].cert_pem
+  tls_key_content = var.use_manual_keys ? file(local.full_private_key_path) : tls_self_signed_cert.this[0].private_key_pem
 }
 
 # (3) Namespace ready check
@@ -127,14 +131,14 @@ resource "null_resource" "save_keys" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      if [ ! -f ${var.private_key_path} ]; then
-        echo "${tls_self_signed_cert.this[0].private_key_pem}" > ${var.private_key_path}
+      if [ ! -f ${local.full_private_key_path} ]; then
+        echo "${tls_self_signed_cert.this[0].private_key_pem}" > ${local.full_private_key_path}
       fi
       if [ ! -f "${path.module}/keys/pub.key" ]; then
         echo "${tls_private_key.this[0].public_key_pem}" > "${path.module}/keys/pub.key"
       fi
-      if [ ! -f ${var.public_key_path} ]; then
-        echo "${tls_self_signed_cert.this[0].cert_pem}" > ${var.public_key_path}
+      if [ ! -f ${local.full_public_key_path} ]; then
+        echo "${tls_self_signed_cert.this[0].cert_pem}" > ${local.full_public_key_path}
       fi
     EOT
   }
@@ -228,7 +232,7 @@ resource "local_file" "secret_enc_file" {
   # for_each = var.secrets
   for_each = local.secrets_to_use
 
-  filename = "${each.key}-enc.yaml"
+  filename = "${path.module}/${each.key}-enc.yaml"
   content  = <<-CONTENT
 apiVersion: v1
 kind: Secret
@@ -323,3 +327,4 @@ resource "null_resource" "concatenate_encrypted_secrets" {
     command = "rm -f ${path.module}/all-encrypted-secrets.yaml"
   }
 }
+
