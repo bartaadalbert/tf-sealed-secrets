@@ -250,11 +250,15 @@ ${join("\n", [
     "  ${k}: ${base64encode(v)}"
   ])}
 CONTENT
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # (13) Waiting for Sealed Secrets Controller
 resource "null_resource" "wait_for_sealed_secrets_controller" {
-
+  depends_on = [kubectl_manifest.sealed_secrets_key, helm_release.sealed_secrets]
   provisioner "local-exec" {
     command = <<-EOT
       until kubectl get services -n sealed-secrets | grep sealed-secrets; do 
@@ -270,6 +274,10 @@ resource "null_resource" "wait_for_sealed_secrets_controller" {
 resource "null_resource" "encrypt_secrets_kubeseal" {
   depends_on = [null_resource.check_and_install_kubeseal,local_file.secret_enc_file,null_resource.wait_for_sealed_secrets_controller]
   for_each = local.secrets_to_use
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
 
   provisioner "local-exec" {
     command = <<-EOT
@@ -290,6 +298,10 @@ resource "null_resource" "encrypt_secrets_kubeseal" {
 # (15) Encrypting List Secrets with Kubeseal
 resource "null_resource" "encrypt_secrets_list_kubeseal" {
   depends_on = [null_resource.check_and_install_kubeseal,null_resource.wait_for_sealed_secrets_controller]
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
 
   count = length(var.secret_file_list) > 0 && !can(var.secret_file_list[0]) ? length(var.secret_file_list) : 0
 
