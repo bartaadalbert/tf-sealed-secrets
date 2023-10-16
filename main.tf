@@ -243,7 +243,7 @@ kind: Secret
 metadata:
   name: ${each.key}
   namespace: ${each.value.namespace != "" ? each.value.namespace : var.namespace}
-type: ${each.value.type}
+type: ${each.value.type != "" ? each.value.type : var.default_secret_type}
 data:
 ${join("\n", [
     for k, v in each.value.data :

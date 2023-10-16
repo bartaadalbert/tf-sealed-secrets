@@ -11,6 +11,12 @@ variable "namespace" {
   default     = "demo"
 }
 
+variable "default_secret_type" {
+  description = "Default type to use if not specified in secrets"
+  type        = string
+  default     = "Opaque"
+}
+
 variable "secrets" {
   description = "Map of secret names, namespaces, types and key-value pairs"
   type        = map(object({
