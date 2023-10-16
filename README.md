@@ -63,23 +63,32 @@ Example of defining secrets within variables:
 
 ```hcl
   variable "secrets" {
-  description = "Map of secret names, namespaces, types and key-value pairs"
-  type        = map(object({
-    namespace = string
+  description = "Map of secret names, their types, namespaces, and key-value pairs"
+  type = map(object({
     type      = string
+    namespace = string
     data      = map(string)
   }))
-  default     = {
-    secret1 = {
+  default = {
+    "ghcrio-image-puller" = {
+      type      = "kubernetes.io/dockerconfigjson",
       namespace = "default",
-      type      = "Opaque",
       data      = {
-        key1 = "value1",
-        key2 = "value2"
-      }
+        ".dockerconfigjson" = <<EOT
+{
+  "auths": {
+    "ghcr.io": {
+      "username": "wwwwwwwww",
+      "password": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
     }
   }
 }
+EOT
+    }
+  }
+}
+}
+
 ```
 
 ## Input Variables
