@@ -283,7 +283,8 @@ resource "null_resource" "encrypt_secrets_kubeseal" {
     command = <<-EOT
       kubeseal -f ${local_file.secret_enc_file[each.key].filename} -w ${local_file.secret_enc_file[each.key].filename} \
         --controller-name sealed-secrets \
-        --controller-namespace ${var.sealed_secret_snamespace}
+        --controller-namespace ${var.sealed_secret_snamespace} \
+        --scope cluster-wide
     EOT
     interpreter = ["bash", "-c"]
   }
@@ -309,7 +310,8 @@ resource "null_resource" "encrypt_secrets_list_kubeseal" {
     command = <<-EOT
       kubeseal -f ${var.secret_file_list[count.index]} -w ${var.secret_file_list[count.index]} \
         --controller-name sealed-secrets \
-        --controller-namespace ${var.sealed_secret_snamespace}
+        --controller-namespace ${var.sealed_secret_snamespace} \
+        --scope cluster-wide
     EOT
     interpreter = ["bash", "-c"]
   }
