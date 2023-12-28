@@ -105,4 +105,9 @@ variable "organization" {
   default     = "ACME Examples, Inc"
 }
 
+variable "def_kubeseal_version" {
+  type        = string
+  default     = "v0.24.5"
+}
+
 #------------END SEALED SECRET settings----------------

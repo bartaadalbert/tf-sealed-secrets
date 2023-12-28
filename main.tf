@@ -9,6 +9,13 @@ resource "null_resource" "check_and_install_kubeseal" {
         echo "kubeseal is not installed. Installing..."
         
         LATEST_KUBESEAL_VERSION=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest | grep -Eo '"tag_name": "v[^"]+"' | cut -d'"' -f4 | cut -c 2-)
+
+        # Set a default version if the latest version cannot be determined
+        if [ -z "$LATEST_KUBESEAL_VERSION" ]; then
+          echo "Failed to determine the latest kubeseal version. Using default version."
+          LATEST_KUBESEAL_VERSION="${var.def_kubeseal_version}"  # Set your default version here
+        fi
+
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
         ARCH=$(uname -m)
 
